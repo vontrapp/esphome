@@ -522,7 +522,7 @@ class DashboardEntry:
         return os.path.basename(self.path)
 
     @property
-    def storage(self):  # type: () -> Optional[StorageJSON]
+    def storage(self) -> Optional[StorageJSON]:
         if not self._loaded_storage:
             self._storage = StorageJSON.load(
                 ext_storage_path(settings.config_dir, self.filename)
@@ -642,6 +642,33 @@ def _ping_func(filename, address):
         command = ["ping", "-c", "1", address]
     rc, _, _ = run_system_command(*command)
     return filename, rc == 0
+
+
+class PrometheusServiceDiscoveryHandler(BaseHandler):
+    @authenticated
+    def get(self):
+        entries = _list_dashboard_entries()
+        self.set_header("content-type", "application/json")
+        sd = []
+        for entry in entries:
+            if entry.web_port is None:
+                continue
+            labels = {
+                "__meta_name": entry.name,
+                "__meta_esp_platform": entry.target_platform,
+                "__meta_esphome_version": entry.storage.esphome_version,
+            }
+            for integration in entry.storage.loaded_integrations:
+                labels[f"__meta_integration_{integration}"] = "true"
+            sd.append(
+                {
+                    "targets": [
+                        f"{entry.address}:{entry.web_port}",
+                    ],
+                    "labels": labels,
+                }
+            )
+        self.write(json.dumps(sd))
 
 
 class MDNSStatusThread(threading.Thread):
@@ -790,7 +817,7 @@ class UndoDeleteRequestHandler(BaseHandler):
         shutil.move(os.path.join(trash_path, configuration), config_file)
 
 
-PING_RESULT = {}  # type: dict
+PING_RESULT: dict = {}
 IMPORT_RESULT = {}
 STOP_EVENT = threading.Event()
 PING_REQUEST = threading.Event()
@@ -816,15 +843,16 @@ class LoginHandler(BaseHandler):
         import requests
 
         headers = {
-            "Authentication": f"Bearer {os.getenv('SUPERVISOR_TOKEN')}",
+            "X-Supervisor-Token": os.getenv("SUPERVISOR_TOKEN"),
         }
+
         data = {
             "username": self.get_argument("username", ""),
             "password": self.get_argument("password", ""),
         }
         try:
             req = requests.post(
-                "http://supervisor/auth", headers=headers, data=data, timeout=30
+                "http://supervisor/auth", headers=headers, json=data, timeout=30
             )
             if req.status_code == 200:
                 self.set_secure_cookie("authenticated", cookie_authenticated_yes)
@@ -905,7 +933,7 @@ def get_static_path(*args):
     return os.path.join(get_base_frontend_path(), "static", *args)
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def get_static_file_url(name):
     base = f"./static/{name}"
 
@@ -992,6 +1020,7 @@ def make_app(debug=get_bool_env(ENV_DEV)):
             (f"{rel}import", ImportRequestHandler),
             (f"{rel}secret_keys", SecretKeysRequestHandler),
             (f"{rel}rename", EsphomeRenameHandler),
+            (f"{rel}prometheus-sd", PrometheusServiceDiscoveryHandler),
         ],
         **app_settings,
     )
