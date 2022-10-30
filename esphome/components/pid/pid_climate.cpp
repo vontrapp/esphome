@@ -129,6 +129,12 @@ void PIDClimate::update_pid_() {
 
   if (this->mode == climate::CLIMATE_MODE_OFF) {
     this->write_output_(0.0);
+  } else if (this->mode == climate::CLIMATE_MODE_HEAT) {
+    // Clamp output value to heating (>= 0) only, off (0.0f) if it would cool
+    this->write_output_(std::max(0.0f, value));
+  } else if (this->mode == climate::CLIMATE_MODE_COOL) {
+    // Clamp output value to cooling (<= 0) only, off (0.0f) if it would heat
+    this->write_output_(std::min(0.0f, value));
   } else {
     this->write_output_(value);
   }
